@@ -9,7 +9,7 @@ Image Gen Kazuma is a power-user extension designed to seamlessly bridge **Silly
 ## ✨ Key Features
 
 ### 🧠 Smart & Context-Aware
-*   **Smart Prompting Logic:** Automatically formats prompts based on your preferred model style (e.g., Booru tags for Pony/Illustrious vs. Natural Language for SDXL) and camera perspective.
+*   **Smart Prompting Logic:** Automatically formats prompts based on your preferred model style (e.g., Booru tags for Pony/Illustrious vs. Natural Language for SDXL/qwen) and camera perspective.
 *   **Workflow Context Switching:** The extension remembers your settings (Steps, CFG, LoRAs) *per workflow*. Switch from an SDXL workflow to an SD1.5 workflow, and all your sliders instantly snap to your last used configuration for that file.
 *   **Diagnostic Mode:** Preview and edit the exact prompt the LLM generated before sending it to the image server.
 
@@ -102,7 +102,7 @@ Under the **Automation** section, you can choose how the extension generates pro
 *   **Strategy: Use Current Active Preset** (Recommended)
     *   This uses your *current* SillyTavern text generation preset.
     *   **Prompt Builder:** A menu will appear allowing you to select:
-        *   **Model Style:** Tells the LLM to write in *Booru Tags* (for Anime/Pony models) or *Natural Prose* (for SDXL/Realism).
+        *   **Model Style:** Tells the LLM to write in *Booru Tags* (for Anime/Pony models) or *Natural Prose* (for SDXL/qwen/Realism).
         *   **Camera Perspective:** Forces the image to be *Scene-focused*, *Character-focused*, or *POV*.
     *   The extension constructs a complex system instruction behind the scenes to ensure the LLM adheres to these constraints.
 
@@ -138,3 +138,4 @@ A: This is intended! The **Context Switcher** feature ensures that settings appr
 ## 📜 License
 
 MIT License. Free to use and modify.
+
