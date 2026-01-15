@@ -414,7 +414,7 @@ async function fetchComfyLists() {
             if (extension_settings[extensionName].selectedSampler) samplerSel.val(extension_settings[extensionName].selectedSampler);
         }
 
-        const loraRes = await fetch(`${comfyUrl}/object_info/LoraLoader`, { mode: "cors", credentials: "include", redirect: "follow", headers: { "Accept": "application/json" }});
+        const loraRes = await fetch(`${comfyUrl}/object_info/LoraLoader`);
         if (loraRes.ok) {
             const json = await loraRes.json();
             const files = json['LoraLoader'].input.required.lora_name[0];
@@ -558,7 +558,7 @@ async function generateWithComfy(positivePrompt, target = null) {
 
     try {
         toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
-        const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json", "Accept": "application/json" }, mode: "cors", credentials: "include", redirect: "follow", body: JSON.stringify({ prompt: workflow }) });
+        const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) });
         if(!res.ok) throw new Error("Failed");
         const data = await res.json();
         await waitForGeneration(url, data.prompt_id, positivePrompt, target);
@@ -941,5 +941,4 @@ function applyWorkflowState(state) {
     $("#kazuma_lora_wt_3").val(s.selectedLoraWt3); $("#kazuma_lora_wt_display_3").text(s.selectedLoraWt3);
     $("#kazuma_lora_wt_4").val(s.selectedLoraWt4); $("#kazuma_lora_wt_display_4").text(s.selectedLoraWt4);
 }
-
 
