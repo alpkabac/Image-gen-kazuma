@@ -91,6 +91,44 @@
                 </div>
             </div>
 
+            <!-- Group 4: Image Editing -->
+            <div class="kazuma-group">
+                <div class="kazuma-header"><i class="fa-solid fa-wand-magic-sparkles"></i> Image Editing</div>
+                
+                <div class="kazuma-row">
+                    <span>Mode</span>
+                    <select id="kazuma_mode" class="text_pole">
+                        <option value="generate">Generate (Text-to-Image)</option>
+                        <option value="edit">Edit (Image-to-Image)</option>
+                    </select>
+                </div>
+                
+                <div id="kazuma_edit_controls" style="display:none; margin-top:10px;">
+                    <div class="kazuma-sub-label">Edit Workflow</div>
+                    <select id="kazuma_edit_workflow_list" class="text_pole" style="width:100%; margin-bottom:10px;"></select>
+                    
+                    <div class="kazuma-sub-label">Input Image</div>
+                    
+                    <div style="display:flex; gap:5px; margin-bottom:10px;">
+                        <button id="kazuma_upload_image" class="menu_button" style="flex:1;">
+                            <i class="fa-solid fa-upload"></i> Upload Image
+                        </button>
+                        <button id="kazuma_use_character" class="menu_button" style="flex:1;">
+                            <i class="fa-solid fa-user"></i> Use Character
+                        </button>
+                    </div>
+                    
+                    <input type="file" id="kazuma_image_file" accept="image/*" style="display:none;" />
+                    
+                    <div id="kazuma_image_preview" style="display:none; margin-top:10px;">
+                        <img id="kazuma_preview_img" style="max-width:100%; border-radius:5px; border:2px solid var(--smart-border-color);" />
+                        <button id="kazuma_clear_image" class="menu_button" style="width:100%; margin-top:5px;">
+                            <i class="fa-solid fa-xmark"></i> Clear
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Collapsible 1: Image Settings -->
             <details class="kazuma-details" open>
                 <summary><i class="fa-solid fa-sliders"></i> Image Parameters</summary>
@@ -147,9 +185,22 @@
             <details class="kazuma-details">
                 <summary><i class="fa-solid fa-flask"></i> LoRA Lab (4 Slots)</summary>
                 <div class="kazuma-content">
+                    <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+                        <button id="kazuma_lora_disable_all" class="menu_button" style="font-size:11px; padding:4px 10px;" title="Disable all LoRAs">
+                            <i class="fa-solid fa-power-off"></i> Disable All
+                        </button>
+                        <button id="kazuma_lora_enable_all" class="menu_button" style="font-size:11px; padding:4px 10px; margin-left:5px;" title="Enable all LoRAs">
+                            <i class="fa-solid fa-bolt"></i> Enable All
+                        </button>
+                    </div>
                     <!-- Slot 1 -->
                     <div class="kazuma-lora-box">
-                        <div class="kazuma-sub-label">LoRA 1</div>
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div class="kazuma-sub-label" style="margin:0;">LoRA 1</div>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer;">
+                                <input type="checkbox" id="kazuma_lora_on_1" checked /> On
+                            </label>
+                        </div>
                         <select id="kazuma_lora_list" class="text_pole" style="width:100%"></select>
                         <div class="kazuma-slider-row" style="margin-top:5px;">
                             <span>Wt: <span id="kazuma_lora_wt_display">1.0</span></span>
@@ -158,7 +209,12 @@
                     </div>
                     <!-- Slot 2 -->
                      <div class="kazuma-lora-box">
-                        <div class="kazuma-sub-label">LoRA 2</div>
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div class="kazuma-sub-label" style="margin:0;">LoRA 2</div>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer;">
+                                <input type="checkbox" id="kazuma_lora_on_2" checked /> On
+                            </label>
+                        </div>
                         <select id="kazuma_lora_list_2" class="text_pole" style="width:100%"></select>
                         <div class="kazuma-slider-row" style="margin-top:5px;">
                             <span>Wt: <span id="kazuma_lora_wt_display_2">1.0</span></span>
@@ -167,7 +223,12 @@
                     </div>
                     <!-- Slot 3 -->
                     <div class="kazuma-lora-box">
-                        <div class="kazuma-sub-label">LoRA 3</div>
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div class="kazuma-sub-label" style="margin:0;">LoRA 3</div>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer;">
+                                <input type="checkbox" id="kazuma_lora_on_3" checked /> On
+                            </label>
+                        </div>
                         <select id="kazuma_lora_list_3" class="text_pole" style="width:100%"></select>
                         <div class="kazuma-slider-row" style="margin-top:5px;">
                             <span>Wt: <span id="kazuma_lora_wt_display_3">1.0</span></span>
@@ -176,7 +237,12 @@
                     </div>
                     <!-- Slot 4 -->
                     <div class="kazuma-lora-box">
-                        <div class="kazuma-sub-label">LoRA 4</div>
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div class="kazuma-sub-label" style="margin:0;">LoRA 4</div>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer;">
+                                <input type="checkbox" id="kazuma_lora_on_4" checked /> On
+                            </label>
+                        </div>
                         <select id="kazuma_lora_list_4" class="text_pole" style="width:100%"></select>
                         <div class="kazuma-slider-row" style="margin-top:5px;">
                             <span>Wt: <span id="kazuma_lora_wt_display_4">1.0</span></span>

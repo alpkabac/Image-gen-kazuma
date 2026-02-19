@@ -1,7 +1,7 @@
 /* eslint-disable no-undef */
 import { extension_settings, getContext } from "../../../extensions.js";
 import { saveSettingsDebounced, generateQuietPrompt, saveChat, reloadCurrentChat, eventSource, event_types, addOneMessage, getRequestHeaders, appendMediaToMessage } from "../../../../script.js";
-import { saveBase64AsFile } from "../../../utils.js";
+import { saveBase64AsFile, getBase64Async } from "../../../utils.js";
 import { humanizedDateTime } from "../../../RossAscends-mods.js";
 import { Popup, POPUP_TYPE } from "../../../popup.js";
 
@@ -28,7 +28,8 @@ const KAZUMA_PLACEHOLDERS = [
     { key: '"*lora3*"', desc: "LoRA 3 Filename" },
     { key: '"*lorawt3*"', desc: "LoRA 3 Weight (Float)" },
     { key: '"*lora4*"', desc: "LoRA 4 Filename" },
-    { key: '"*lorawt4*"', desc: "LoRA 4 Weight (Float)" }
+    { key: '"*lorawt4*"', desc: "LoRA 4 Weight (Float)" },
+    { key: '"*image*"', desc: "Input Image Filename (Edit Mode)" }
 ];
 
 const RESOLUTIONS = [
@@ -72,6 +73,10 @@ const defaultSettings = {
     selectedLoraWt2: 1.0,
     selectedLoraWt3: 1.0,
     selectedLoraWt4: 1.0,
+    loraEnabled1: true,
+    loraEnabled2: true,
+    loraEnabled3: true,
+    loraEnabled4: true,
     imgWidth: 1024,
     imgHeight: 1024,
     autoGenEnabled: false,
@@ -89,7 +94,11 @@ const defaultSettings = {
     promptPerspective: "scene",   
     promptExtra: "",              
     connectionProfile: "",
-    savedWorkflowStates: {}  
+    savedWorkflowStates: {},
+    editMode: false,
+    selectedImage: null,
+    selectedImageBase64: null,
+    editWorkflowName: ""
 };
 
 async function loadSettings() {
@@ -121,17 +130,38 @@ async function loadSettings() {
     $("#kazuma_lora_wt_4").val(extension_settings[extensionName].selectedLoraWt4);
     $("#kazuma_lora_wt_display_4").text(extension_settings[extensionName].selectedLoraWt4);
 
+    // LoRA on/off toggles
+    $("#kazuma_lora_on_1").prop("checked", extension_settings[extensionName].loraEnabled1 !== false);
+    $("#kazuma_lora_on_2").prop("checked", extension_settings[extensionName].loraEnabled2 !== false);
+    $("#kazuma_lora_on_3").prop("checked", extension_settings[extensionName].loraEnabled3 !== false);
+    $("#kazuma_lora_on_4").prop("checked", extension_settings[extensionName].loraEnabled4 !== false);
+
     $("#kazuma_negative").val(extension_settings[extensionName].customNegative);
     $("#kazuma_seed").val(extension_settings[extensionName].customSeed);
     $("#kazuma_compress").prop("checked", extension_settings[extensionName].compressImages);
 	
 	$("#kazuma_profile_strategy").val(extension_settings[extensionName].profileStrategy || "current");
-toggleProfileVisibility();
+    toggleProfileVisibility();
 
     updateSliderInput('kazuma_steps', 'kazuma_steps_val', extension_settings[extensionName].steps);
     updateSliderInput('kazuma_cfg', 'kazuma_cfg_val', extension_settings[extensionName].cfg);
     updateSliderInput('kazuma_denoise', 'kazuma_denoise_val', extension_settings[extensionName].denoise);
     updateSliderInput('kazuma_clip', 'kazuma_clip_val', extension_settings[extensionName].clipSkip);
+
+    // Load edit mode settings
+    $("#kazuma_mode").val(extension_settings[extensionName].editMode ? "edit" : "generate");
+    $("#kazuma_edit_workflow_list").val(extension_settings[extensionName].editWorkflowName || "");
+    
+    // Restore image preview if exists
+    if (extension_settings[extensionName].selectedImageBase64) {
+        $("#kazuma_preview_img").attr("src", extension_settings[extensionName].selectedImageBase64);
+        $("#kazuma_image_preview").show();
+    }
+    
+    // Toggle edit controls based on mode
+    const isEditMode = extension_settings[extensionName].editMode;
+    $("#kazuma_edit_controls").toggle(isEditMode);
+    updateGenerateButtonText(isEditMode);
 
     populateResolutions();
     populateProfiles();
@@ -153,6 +183,11 @@ function toggleProfileVisibility() {
     }
 }
 
+function updateGenerateButtonText(isEditMode) {
+    const btnText = isEditMode ? "Edit Image" : "Visualize Last Message";
+    $("#kazuma_gen_prompt_btn").html(`<i class="fa-solid fa-bolt"></i> ${btnText}`);
+}
+
 function updateSliderInput(sliderId, numberId, value) {
     $(`#${sliderId}`).val(value);
     $(`#${numberId}`).val(value);
@@ -169,7 +204,11 @@ function populateResolutions() {
 // --- WORKFLOW MANAGER ---
 async function populateWorkflows() {
     const sel = $("#kazuma_workflow_list");
+    const editSel = $("#kazuma_edit_workflow_list");
     sel.empty();
+    editSel.empty();
+    editSel.append('<option value="">-- Select Edit Workflow --</option>');
+    
     try {
         const response = await fetch('/api/sd/comfy/workflows', {
             method: 'POST',
@@ -181,8 +220,10 @@ async function populateWorkflows() {
             const workflows = await response.json();
             workflows.forEach(w => {
                 sel.append(`<option value="${w}">${w}</option>`);
+                editSel.append(`<option value="${w}">${w}</option>`);
             });
 
+            // Set generation workflow
             if (extension_settings[extensionName].currentWorkflowName) {
                 if (workflows.includes(extension_settings[extensionName].currentWorkflowName)) {
                     sel.val(extension_settings[extensionName].currentWorkflowName);
@@ -196,9 +237,17 @@ async function populateWorkflows() {
                 extension_settings[extensionName].currentWorkflowName = workflows[0];
                 saveSettingsDebounced();
             }
+            
+            // Set edit workflow
+            if (extension_settings[extensionName].editWorkflowName) {
+                if (workflows.includes(extension_settings[extensionName].editWorkflowName)) {
+                    editSel.val(extension_settings[extensionName].editWorkflowName);
+                }
+            }
         }
     } catch (e) {
         sel.append('<option disabled>Failed to load</option>');
+        editSel.append('<option disabled>Failed to load</option>');
     }
 }
 
@@ -448,6 +497,14 @@ async function onGeneratePrompt() {
     const context = getContext();
     if (!context.chat || context.chat.length === 0) return toastr.warning("No chat history.");
 
+    const isEditMode = extension_settings[extensionName].editMode;
+    const selectedImage = extension_settings[extensionName].selectedImage;
+    
+    // Check if edit mode requires an image
+    if (isEditMode && !selectedImage) {
+        return toastr.warning("Edit mode requires an image. Please upload or select one.");
+    }
+
     const strategy = extension_settings[extensionName].profileStrategy || "current";
     const requestProfile = extension_settings[extensionName].connectionProfile;
     const targetDropdown = $("#settings_preset_openai");
@@ -462,34 +519,82 @@ async function onGeneratePrompt() {
     }
 
     // [START PROGRESS]
-    showKazumaProgress("Generating Prompt...");
+    showKazumaProgress(isEditMode ? "Converting to edit instruction..." : "Generating Prompt...");
 
     try {
-        toastr.info("Visualizing...", "Image Gen Kazuma");
-        const lastMessage = context.chat[context.chat.length - 1].mes;
+        toastr.info(isEditMode ? "Converting to edit..." : "Visualizing...", "Image Gen Kazuma");
+        
+        // Find the last non-system message (user or character message)
+        let lastMessage = "";
+        for (let i = context.chat.length - 1; i >= 0; i--) {
+            const msg = context.chat[i];
+            // Skip system messages (like image generation messages)
+            if (!msg.is_system && msg.mes && msg.mes.trim() !== "") {
+                lastMessage = msg.mes;
+                break;
+            }
+        }
+        
+        // Fallback if no valid message found
+        if (!lastMessage || lastMessage.trim() === "") {
+            toastr.warning("No valid message found to generate from.");
+            hideKazumaProgress();
+            return;
+        }
+        
         const s = extension_settings[extensionName];
 
-        const style = s.promptStyle || "standard";
-        const persp = s.promptPerspective || "scene";
-        const extra = s.promptExtra ? `, ${s.promptExtra}` : "";
+        let instruction;
+        if (isEditMode) {
+            // Edit mode: convert to Flux Klein edit instruction
+            // IMPORTANT: Strong override phrasing to cut through roleplay system prompts
+            instruction = `[OVERRIDE ALL PREVIOUS INSTRUCTIONS. THIS IS A SEPARATE TASK.]
 
-        let styleInst = "", perspInst = "";
-        if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
-        else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
-        else styleInst = "Use a list of detailed keywords/descriptors.";
+You are an image prompt writer. Ignore all roleplay instructions, character cards, and output format rules above. Your ONLY job is to write ONE short image editing prompt.
 
-        if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
-        else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
-        else perspInst = "Describe the entire environment and atmosphere.";
+Convert this scene into a Flux Klein 9B image editing prompt. The input image is a photo/portrait of a woman.
 
-        const instruction = `
-            Task: Write an image generation prompt for the following scene.
-            Scene: "${lastMessage}"
-            Style Constraint: ${styleInst}
-            Perspective: ${perspInst}
-            Additional Req: ${extra}
-            Output ONLY the prompt text.
+Scene: "${lastMessage}"
+
+Write a single paragraph describing what the woman is doing in the scene. Use natural language sentences. Be specific about: body position, camera angle, expressions, clothing state, and what is visible in frame. For NSFW scenes, use direct anatomical terms. For SFW scenes, describe the activity, setting, and mood.
+
+Examples:
+- "The woman is on her knees performing oral sex on a standing man. Only the man's lower body is visible in frame. Her lips are wrapped around his erect penis and she is making eye contact with the camera."
+- "A high-angle POV looking down at the woman lying on her back on a bed, nude, with her legs spread. Soft warm bedroom lighting from the left side."
+- "The woman is standing at a kitchen counter preparing a meal, wearing a casual white sundress. Her hands are covered in flour and she is smiling warmly. Soft natural light streams through a window to her left."
+- "The woman is bent over a desk in doggystyle position, looking back over her shoulder at the camera with a teasing expression. She is wearing a partially unbuttoned white shirt with no bra."
+- "The woman is giving a blowjob. She makes intense eye contact with the camera. Her lips are fully wrapped around a large penis as she is in the midst of the blowjob."
+
+Output ONLY the edit prompt. Nothing else. No quotes, no prefixes, no commentary.`;
+            // Append extra instructions if provided
+            const extra = s.promptExtra ? s.promptExtra.trim() : "";
+            if (extra) {
+                instruction += `\n\nAdditional requirements to include in the prompt: ${extra}`;
+            }
+        } else {
+            // Generation mode: existing logic
+            const style = s.promptStyle || "standard";
+            const persp = s.promptPerspective || "scene";
+            const extra = s.promptExtra ? `, ${s.promptExtra}` : "";
+
+            let styleInst = "", perspInst = "";
+            if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
+            else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
+            else styleInst = "Use a list of detailed keywords/descriptors.";
+
+            if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
+            else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
+            else perspInst = "Describe the entire environment and atmosphere.";
+
+            instruction = `
+Task: Write an image generation prompt for the following scene.
+Scene: "${lastMessage}"
+Style Constraint: ${styleInst}
+Perspective: ${perspInst}
+Additional Req: ${extra}
+Output ONLY the prompt text.
             `;
+        }
 
         let generatedText = await generateQuietPrompt(instruction, true);
 
@@ -504,7 +609,7 @@ async function onGeneratePrompt() {
 
             const $content = $(`
                 <div style="display: flex; flex-direction: column; gap: 10px;">
-                    <p><b>Review generated prompt:</b></p>
+                    <p><b>Review generated ${isEditMode ? 'edit instruction' : 'prompt'}:</b></p>
                     <textarea class="text_pole" rows="6" style="width:100%; resize:vertical; font-family:monospace;">${generatedText}</textarea>
                 </div>
             `);
@@ -524,7 +629,7 @@ async function onGeneratePrompt() {
 
         // Update progress text
         showKazumaProgress("Sending to ComfyUI...");
-        await generateWithComfy(generatedText, null);
+        await generateWithComfy(generatedText, null, isEditMode);
 
     } catch (err) {
         // [HIDE PROGRESS ON ERROR]
@@ -535,9 +640,17 @@ async function onGeneratePrompt() {
     }
 }
 
-async function generateWithComfy(positivePrompt, target = null) {
+async function generateWithComfy(positivePrompt, target = null, isEditMode = false) {
     const url = extension_settings[extensionName].comfyUrl;
-    const currentName = extension_settings[extensionName].currentWorkflowName;
+    
+    // Choose workflow based on mode
+    const currentName = isEditMode && extension_settings[extensionName].editWorkflowName
+        ? extension_settings[extensionName].editWorkflowName
+        : extension_settings[extensionName].currentWorkflowName;
+
+    if (!currentName) {
+        return toastr.error(isEditMode ? "No edit workflow selected" : "No workflow selected");
+    }
 
     // Load from server
     let workflowRaw;
@@ -554,7 +667,7 @@ async function generateWithComfy(positivePrompt, target = null) {
         finalSeed = Math.floor(Math.random() * 1000000000);
     }
 
-    workflow = injectParamsIntoWorkflow(workflow, positivePrompt, finalSeed);
+    workflow = injectParamsIntoWorkflow(workflow, positivePrompt, finalSeed, isEditMode);
 
     try {
         toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
@@ -562,19 +675,50 @@ async function generateWithComfy(positivePrompt, target = null) {
         if(!res.ok) throw new Error("Failed");
         const data = await res.json();
         await waitForGeneration(url, data.prompt_id, positivePrompt, target);
-    } catch(e) { toastr.error("Comfy Error: " + e.message); }
+    } catch(e) { 
+        hideKazumaProgress();
+        toastr.error("Comfy Error: " + e.message); 
+    }
 }
 
-function injectParamsIntoWorkflow(workflow, promptText, finalSeed) {
+function injectParamsIntoWorkflow(workflow, promptText, finalSeed, isEditMode = false) {
     const s = extension_settings[extensionName];
     let seedInjected = false;
+    
+    // LoRA mapping: placeholder → { value setting key, weight setting key, enabled setting key }
+    const loraMap = {
+        "*lora*":   { val: s.selectedLora  || "None", wt: parseFloat(s.selectedLoraWt)  || 1.0, on: s.loraEnabled1 !== false },
+        "*lora2*":  { val: s.selectedLora2 || "None", wt: parseFloat(s.selectedLoraWt2) || 1.0, on: s.loraEnabled2 !== false },
+        "*lora3*":  { val: s.selectedLora3 || "None", wt: parseFloat(s.selectedLoraWt3) || 1.0, on: s.loraEnabled3 !== false },
+        "*lora4*":  { val: s.selectedLora4 || "None", wt: parseFloat(s.selectedLoraWt4) || 1.0, on: s.loraEnabled4 !== false },
+    };
+    const loraWtMap = {
+        "*lorawt*":  loraMap["*lora*"],
+        "*lorawt2*": loraMap["*lora2*"],
+        "*lorawt3*": loraMap["*lora3*"],
+        "*lorawt4*": loraMap["*lora4*"],
+    };
 
     for (const nodeId in workflow) {
         const node = workflow[nodeId];
         if (node.inputs) {
             for (const key in node.inputs) {
                 const val = node.inputs[key];
+                
+                // --- Handle rgthree Power Lora Loader nested objects ---
+                if (val && typeof val === 'object' && !Array.isArray(val) && 'lora' in val) {
+                    // This is a rgthree lora slot like { on: true, lora: "*lora*", strength: "*lorawt*" }
+                    const loraPlaceholder = val.lora;
+                    if (loraPlaceholder && loraMap[loraPlaceholder]) {
+                        const info = loraMap[loraPlaceholder];
+                        val.lora = info.val;
+                        val.strength = info.wt;
+                        val.on = info.on;
+                    }
+                    continue;
+                }
 
+                // --- Standard flat value replacements ---
                 if (val === "*input*") node.inputs[key] = promptText;
                 if (val === "*ninput*") node.inputs[key] = s.customNegative || "";
                 if (val === "*seed*") { node.inputs[key] = finalSeed; seedInjected = true; }
@@ -586,17 +730,21 @@ function injectParamsIntoWorkflow(workflow, promptText, finalSeed) {
                 if (val === "*denoise*") node.inputs[key] = parseFloat(s.denoise) || 1.0;
                 if (val === "*clip_skip*") node.inputs[key] = -Math.abs(parseInt(s.clipSkip)) || -1;
 
-                if (val === "*lora*") node.inputs[key] = s.selectedLora || "None";
-                if (val === "*lora2*") node.inputs[key] = s.selectedLora2 || "None";
-                if (val === "*lora3*") node.inputs[key] = s.selectedLora3 || "None";
-                if (val === "*lora4*") node.inputs[key] = s.selectedLora4 || "None";
-                if (val === "*lorawt*") node.inputs[key] = parseFloat(s.selectedLoraWt) || 1.0;
-                if (val === "*lorawt2*") node.inputs[key] = parseFloat(s.selectedLoraWt2) || 1.0;
-                if (val === "*lorawt3*") node.inputs[key] = parseFloat(s.selectedLoraWt3) || 1.0;
-                if (val === "*lorawt4*") node.inputs[key] = parseFloat(s.selectedLoraWt4) || 1.0;
+                // Standard LoraLoader (flat values)
+                if (val && loraMap[val]) node.inputs[key] = loraMap[val].val;
+                if (val && loraWtMap[val]) node.inputs[key] = loraWtMap[val].wt;
 
                 if (val === "*width*") node.inputs[key] = parseInt(s.imgWidth) || 512;
                 if (val === "*height*") node.inputs[key] = parseInt(s.imgHeight) || 512;
+                
+                // Edit mode specific: inject image filename
+                if (val === "*image*") {
+                    if (isEditMode && s.selectedImage) {
+                        node.inputs[key] = s.selectedImage;
+                    } else if (isEditMode && !s.selectedImage) {
+                        throw new Error("Edit mode requires an image to be selected");
+                    }
+                }
             }
             if (!seedInjected && node.class_type === "KSampler" && 'seed' in node.inputs && typeof node.inputs['seed'] === 'number') {
                node.inputs.seed = finalSeed;
@@ -626,18 +774,26 @@ async function onImageSwiped(data) {
 
     const prompt = mediaObj.title;
     toastr.info("New variation...", "Image Gen Kazuma");
-    await generateWithComfy(prompt, { message: message, element: $(element) });
+    
+    // Check if current mode is edit mode for proper regeneration
+    const isEditMode = extension_settings[extensionName].editMode;
+    await generateWithComfy(prompt, { message: message, element: $(element) }, isEditMode);
 }
 
 async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
      // [UPDATE TEXT]
      showKazumaProgress("Rendering Image...");
+     let isProcessed = false; // Guard against async race condition
 
      const checkInterval = setInterval(async () => {
+        if (isProcessed) return; // Skip if already handled
         try {
             const h = await (await fetch(`${baseUrl}/history/${promptId}`)).json();
             if (h[promptId]) {
+                if (isProcessed) return; // Double-check after async fetch
+                isProcessed = true;      // Lock BEFORE any processing
                 clearInterval(checkInterval);
+                
                 const outputs = h[promptId].outputs;
                 let finalImage = null;
                 for (const nodeId in outputs) {
@@ -809,6 +965,102 @@ jQuery(async () => {
         $("#kazuma_edit_workflow").on("click", onComfyOpenWorkflowEditorClick);
         $("#kazuma_delete_workflow").on("click", onComfyDeleteWorkflowClick);
 
+        // Edit Mode Event Handlers
+        $("#kazuma_mode").on("change", (e) => {
+            const mode = $(e.target).val();
+            const isEdit = mode === "edit";
+            
+            extension_settings[extensionName].editMode = isEdit;
+            $("#kazuma_edit_controls").toggle(isEdit);
+            updateGenerateButtonText(isEdit);
+            
+            saveSettingsDebounced();
+        });
+
+        $("#kazuma_edit_workflow_list").on("change", (e) => {
+            extension_settings[extensionName].editWorkflowName = $(e.target).val();
+            saveSettingsDebounced();
+        });
+
+        // Image upload
+        $("#kazuma_upload_image").on("click", () => $("#kazuma_image_file").click());
+
+        $("#kazuma_image_file").on("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            try {
+                // Convert to base64 for preview
+                const base64 = await getBase64Async(file);
+                
+                // Upload to ComfyUI
+                showKazumaProgress("Uploading image...");
+                const filename = await uploadImageToComfy(base64, file.name);
+                hideKazumaProgress();
+                
+                // Save to settings
+                extension_settings[extensionName].selectedImage = filename;
+                extension_settings[extensionName].selectedImageBase64 = base64;
+                
+                // Show preview
+                $("#kazuma_preview_img").attr("src", base64);
+                $("#kazuma_image_preview").show();
+                
+                toastr.success("Image loaded!");
+                saveSettingsDebounced();
+                
+            } catch (e) {
+                hideKazumaProgress();
+                toastr.error("Upload failed: " + e.message);
+            }
+            
+            $(e.target).val(''); // Reset input
+        });
+
+        // Use character image
+        $("#kazuma_use_character").on("click", async () => {
+            try {
+                showKazumaProgress("Loading character image...");
+                const base64 = await getCharacterImage();
+                
+                if (!base64) {
+                    hideKazumaProgress();
+                    return;
+                }
+                
+                // Upload to ComfyUI with character name
+                const context = getContext();
+                const charName = context.characters[context.characterId]?.name || "character";
+                const filename = `${charName}_edit_${Date.now()}.png`;
+                
+                const uploadedName = await uploadImageToComfy(base64, filename);
+                hideKazumaProgress();
+                
+                // Save and preview
+                extension_settings[extensionName].selectedImage = uploadedName;
+                extension_settings[extensionName].selectedImageBase64 = base64;
+                
+                $("#kazuma_preview_img").attr("src", base64);
+                $("#kazuma_image_preview").show();
+                
+                toastr.success("Character image loaded!");
+                saveSettingsDebounced();
+                
+            } catch (e) {
+                hideKazumaProgress();
+                toastr.error("Failed to load character image: " + e.message);
+            }
+        });
+
+        // Clear image
+        $("#kazuma_clear_image").on("click", () => {
+            extension_settings[extensionName].selectedImage = null;
+            extension_settings[extensionName].selectedImageBase64 = null;
+            $("#kazuma_image_preview").hide();
+            saveSettingsDebounced();
+            toastr.info("Image cleared");
+        });
+
         $("#kazuma_model_list").on("change", (e) => { extension_settings[extensionName].selectedModel = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_sampler_list").on("change", (e) => { extension_settings[extensionName].selectedSampler = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_resolution_list").on("change", (e) => {
@@ -828,6 +1080,32 @@ jQuery(async () => {
         $("#kazuma_lora_wt_2").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt2 = v; $("#kazuma_lora_wt_display_2").text(v); saveSettingsDebounced(); });
         $("#kazuma_lora_wt_3").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt3 = v; $("#kazuma_lora_wt_display_3").text(v); saveSettingsDebounced(); });
         $("#kazuma_lora_wt_4").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt4 = v; $("#kazuma_lora_wt_display_4").text(v); saveSettingsDebounced(); });
+
+        // LoRA on/off toggles
+        $("#kazuma_lora_on_1").on("change", (e) => { extension_settings[extensionName].loraEnabled1 = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_lora_on_2").on("change", (e) => { extension_settings[extensionName].loraEnabled2 = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_lora_on_3").on("change", (e) => { extension_settings[extensionName].loraEnabled3 = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_lora_on_4").on("change", (e) => { extension_settings[extensionName].loraEnabled4 = $(e.target).prop("checked"); saveSettingsDebounced(); });
+
+        // Disable/Enable All LoRAs
+        $("#kazuma_lora_disable_all").on("click", () => {
+            extension_settings[extensionName].loraEnabled1 = false;
+            extension_settings[extensionName].loraEnabled2 = false;
+            extension_settings[extensionName].loraEnabled3 = false;
+            extension_settings[extensionName].loraEnabled4 = false;
+            $("#kazuma_lora_on_1, #kazuma_lora_on_2, #kazuma_lora_on_3, #kazuma_lora_on_4").prop("checked", false);
+            saveSettingsDebounced();
+            toastr.info("All LoRAs disabled");
+        });
+        $("#kazuma_lora_enable_all").on("click", () => {
+            extension_settings[extensionName].loraEnabled1 = true;
+            extension_settings[extensionName].loraEnabled2 = true;
+            extension_settings[extensionName].loraEnabled3 = true;
+            extension_settings[extensionName].loraEnabled4 = true;
+            $("#kazuma_lora_on_1, #kazuma_lora_on_2, #kazuma_lora_on_3, #kazuma_lora_on_4").prop("checked", true);
+            saveSettingsDebounced();
+            toastr.info("All LoRAs enabled");
+        });
 
         $("#kazuma_width, #kazuma_height").on("input", (e) => { extension_settings[extensionName][e.target.id === "kazuma_width" ? "imgWidth" : "imgHeight"] = parseInt($(e.target).val()); saveSettingsDebounced(); });
         $("#kazuma_negative").on("input", (e) => { extension_settings[extensionName].customNegative = $(e.target).val(); saveSettingsDebounced(); });
@@ -878,6 +1156,60 @@ function showKazumaProgress(text = "Processing...") {
 function hideKazumaProgress() {
     $("#kazuma_progress_overlay").hide();
 }
+
+/* --- IMAGE EDITING HELPER FUNCTIONS --- */
+async function uploadImageToComfy(base64Data, filename) {
+    const comfyUrl = extension_settings[extensionName].comfyUrl;
+    
+    // Convert base64 to blob
+    const blob = await fetch(base64Data).then(r => r.blob());
+    
+    // Create form data
+    const formData = new FormData();
+    formData.append('image', blob, filename);
+    formData.append('overwrite', 'true');
+    
+    // Upload to ComfyUI
+    const response = await fetch(`${comfyUrl}/upload/image`, {
+        method: 'POST',
+        body: formData
+    });
+    
+    if (!response.ok) throw new Error('Upload failed');
+    
+    const result = await response.json();
+    return result.name; // Returns saved filename
+}
+
+async function getCharacterImage() {
+    const context = getContext();
+    
+    if (!context.characterId && context.characterId !== 0) {
+        toastr.warning("No character selected");
+        return null;
+    }
+    
+    // Get character data
+    const character = context.characters[context.characterId];
+    if (!character || !character.avatar) {
+        toastr.warning("Character has no image");
+        return null;
+    }
+    
+    // Build avatar URL
+    const avatarUrl = character.avatar.replace(/^\/+/, '');
+    const fullUrl = `/characters/${avatarUrl}`;
+    
+    // Convert to base64
+    const response = await fetch(fullUrl);
+    if (!response.ok) throw new Error("Failed to fetch character image");
+    
+    const blob = await response.blob();
+    const base64 = await blobToBase64(blob);
+    
+    return base64;
+}
+
 /* --- WORKFLOW CONTEXT MANAGERS --- */
 function getWorkflowState() {
     const s = extension_settings[extensionName];
@@ -898,10 +1230,10 @@ function getWorkflowState() {
         promptPerspective: s.promptPerspective,
         promptExtra: s.promptExtra,
         // LoRAs
-        selectedLora: s.selectedLora, selectedLoraWt: s.selectedLoraWt,
-        selectedLora2: s.selectedLora2, selectedLoraWt2: s.selectedLoraWt2,
-        selectedLora3: s.selectedLora3, selectedLoraWt3: s.selectedLoraWt3,
-        selectedLora4: s.selectedLora4, selectedLoraWt4: s.selectedLoraWt4,
+        selectedLora: s.selectedLora, selectedLoraWt: s.selectedLoraWt, loraEnabled1: s.loraEnabled1,
+        selectedLora2: s.selectedLora2, selectedLoraWt2: s.selectedLoraWt2, loraEnabled2: s.loraEnabled2,
+        selectedLora3: s.selectedLora3, selectedLoraWt3: s.selectedLoraWt3, loraEnabled3: s.loraEnabled3,
+        selectedLora4: s.selectedLora4, selectedLoraWt4: s.selectedLoraWt4, loraEnabled4: s.loraEnabled4,
     };
 }
 
@@ -940,5 +1272,11 @@ function applyWorkflowState(state) {
     $("#kazuma_lora_wt_2").val(s.selectedLoraWt2); $("#kazuma_lora_wt_display_2").text(s.selectedLoraWt2);
     $("#kazuma_lora_wt_3").val(s.selectedLoraWt3); $("#kazuma_lora_wt_display_3").text(s.selectedLoraWt3);
     $("#kazuma_lora_wt_4").val(s.selectedLoraWt4); $("#kazuma_lora_wt_display_4").text(s.selectedLoraWt4);
+
+    // LoRA on/off toggles
+    $("#kazuma_lora_on_1").prop("checked", s.loraEnabled1 !== false);
+    $("#kazuma_lora_on_2").prop("checked", s.loraEnabled2 !== false);
+    $("#kazuma_lora_on_3").prop("checked", s.loraEnabled3 !== false);
+    $("#kazuma_lora_on_4").prop("checked", s.loraEnabled4 !== false);
 }
 
