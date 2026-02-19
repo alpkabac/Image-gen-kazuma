@@ -640,6 +640,41 @@ Output ONLY the prompt text.
     }
 }
 
+async function onManualPrompt() {
+    if (!extension_settings[extensionName].enabled) return;
+
+    const isEditMode = extension_settings[extensionName].editMode;
+
+    if (isEditMode && !extension_settings[extensionName].selectedImage) {
+        return toastr.warning("Edit mode requires an image. Please upload or select one.");
+    }
+
+    const $content = $(`
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            <p><b>Enter your ${isEditMode ? 'edit instruction' : 'image prompt'} manually:</b></p>
+            <textarea class="text_pole" rows="6" style="width:100%; resize:vertical; font-family:monospace;" placeholder="${isEditMode ? 'e.g. Change her hair color to bright blue' : 'e.g. a woman standing in a field at sunset'}"></textarea>
+        </div>
+    `);
+    let currentText = "";
+    $content.find("textarea").on("input", function() { currentText = $(this).val(); });
+    const popup = new Popup($content, POPUP_TYPE.CONFIRM, "Manual Prompt", { okButton: "Send", cancelButton: "Cancel" });
+    const confirmed = await popup.show();
+
+    if (!confirmed || !currentText.trim()) {
+        if (confirmed && !currentText.trim()) toastr.warning("Prompt is empty.");
+        return;
+    }
+
+    showKazumaProgress("Sending to ComfyUI...");
+    try {
+        await generateWithComfy(currentText.trim(), null, isEditMode);
+    } catch (err) {
+        hideKazumaProgress();
+        console.error(err);
+        toastr.error("Generation failed. Check console.");
+    }
+}
+
 async function generateWithComfy(positivePrompt, target = null, isEditMode = false) {
     const url = extension_settings[extensionName].comfyUrl;
     
@@ -1133,6 +1168,7 @@ jQuery(async () => {
 
         $("#kazuma_test_btn").on("click", onTestConnection);
         $("#kazuma_gen_prompt_btn").on("click", onGeneratePrompt);
+        $("#kazuma_manual_prompt_btn").on("click", onManualPrompt);
 
         loadSettings();
         eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
