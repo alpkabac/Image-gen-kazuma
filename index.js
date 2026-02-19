@@ -19,6 +19,7 @@ const KAZUMA_PLACEHOLDERS = [
     { key: '"*clip_skip*"', desc: "CLIP Skip (Integer)" },
     { key: '"*model*"', desc: "Checkpoint Name" },
     { key: '"*sampler*"', desc: "Sampler Name" },
+    { key: '"*scheduler*"', desc: "Scheduler Name" },
     { key: '"*width*"', desc: "Image Width (px)" },
     { key: '"*height*"', desc: "Image Height (px)" },
     { key: '"*lora*"', desc: "LoRA 1 Filename" },
@@ -84,6 +85,7 @@ const defaultSettings = {
     customNegative: "bad quality, blurry, worst quality, low quality",
     customSeed: -1,
     selectedSampler: "euler",
+    selectedScheduler: "normal",
     compressImages: true,
     steps: 20,
     cfg: 7.0,
@@ -440,6 +442,7 @@ async function fetchComfyLists() {
     const comfyUrl = extension_settings[extensionName].comfyUrl;
     const modelSel = $("#kazuma_model_list");
     const samplerSel = $("#kazuma_sampler_list");
+    const schedulerSel = $("#kazuma_scheduler_list");
     const loraSelectors = [ $("#kazuma_lora_list"), $("#kazuma_lora_list_2"), $("#kazuma_lora_list_3"), $("#kazuma_lora_list_4") ];
 
     try {
@@ -461,6 +464,14 @@ async function fetchComfyLists() {
             samplerSel.empty();
             samplers.forEach(s => samplerSel.append(`<option value="${s}">${s}</option>`));
             if (extension_settings[extensionName].selectedSampler) samplerSel.val(extension_settings[extensionName].selectedSampler);
+        }
+
+        const schedulerRes = await fetch('/api/sd/comfy/schedulers', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ url: comfyUrl }) });
+        if (schedulerRes.ok) {
+            const schedulers = await schedulerRes.json();
+            schedulerSel.empty();
+            schedulers.forEach(s => schedulerSel.append(`<option value="${s}">${s}</option>`));
+            if (extension_settings[extensionName].selectedScheduler) schedulerSel.val(extension_settings[extensionName].selectedScheduler);
         }
 
         const loraRes = await fetch(`${comfyUrl}/object_info/LoraLoader`);
@@ -758,6 +769,7 @@ function injectParamsIntoWorkflow(workflow, promptText, finalSeed, isEditMode = 
                 if (val === "*ninput*") node.inputs[key] = s.customNegative || "";
                 if (val === "*seed*") { node.inputs[key] = finalSeed; seedInjected = true; }
                 if (val === "*sampler*") node.inputs[key] = s.selectedSampler || "euler";
+                if (val === "*scheduler*") node.inputs[key] = s.selectedScheduler || "normal";
                 if (val === "*model*") node.inputs[key] = s.selectedModel || "v1-5-pruned.ckpt";
 
                 if (val === "*steps*") node.inputs[key] = parseInt(s.steps) || 20;
@@ -1098,6 +1110,7 @@ jQuery(async () => {
 
         $("#kazuma_model_list").on("change", (e) => { extension_settings[extensionName].selectedModel = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_sampler_list").on("change", (e) => { extension_settings[extensionName].selectedSampler = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_scheduler_list").on("change", (e) => { extension_settings[extensionName].selectedScheduler = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_resolution_list").on("change", (e) => {
             const idx = parseInt($(e.target).val());
             if (!isNaN(idx) && RESOLUTIONS[idx]) {
@@ -1254,6 +1267,7 @@ function getWorkflowState() {
     return {
         selectedModel: s.selectedModel,
         selectedSampler: s.selectedSampler,
+        selectedScheduler: s.selectedScheduler,
         steps: s.steps,
         cfg: s.cfg,
         denoise: s.denoise,
@@ -1282,6 +1296,7 @@ function applyWorkflowState(state) {
     // 2. Update UI Elements
     $("#kazuma_model_list").val(s.selectedModel);
     $("#kazuma_sampler_list").val(s.selectedSampler);
+    $("#kazuma_scheduler_list").val(s.selectedScheduler);
 
     updateSliderInput('kazuma_steps', 'kazuma_steps_val', s.steps);
     updateSliderInput('kazuma_cfg', 'kazuma_cfg_val', s.cfg);
