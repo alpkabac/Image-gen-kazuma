@@ -1155,6 +1155,42 @@ jQuery(async () => {
             toastr.info("All LoRAs enabled");
         });
 
+        // LoRA search filter - single delegated handler with debounce
+        const loraOptionsCache = {};
+        let loraSearchTimer = null;
+        $(document).on("input", ".kazuma_lora_search", function() {
+            const $input = $(this);
+            const targetId = $input.data("target");
+            const $select = $(`#${targetId}`);
+            
+            // Cache original options on first search
+            if (!loraOptionsCache[targetId]) {
+                loraOptionsCache[targetId] = $select.find("option").map(function() {
+                    return { val: this.value, text: this.textContent };
+                }).get();
+            }
+            
+            clearTimeout(loraSearchTimer);
+            loraSearchTimer = setTimeout(() => {
+                const query = $input.val().toLowerCase();
+                const current = $select.val();
+                const opts = loraOptionsCache[targetId];
+                
+                $select.empty();
+                for (let i = 0; i < opts.length; i++) {
+                    const o = opts[i];
+                    if (!query || o.val === "" || o.text.toLowerCase().includes(query)) {
+                        $select.append(`<option value="${o.val}">${o.text}</option>`);
+                    }
+                }
+                
+                // Restore selection if it still exists
+                if (current && $select.find(`option[value="${CSS.escape(current)}"]`).length) {
+                    $select.val(current);
+                }
+            }, 150);
+        });
+
         $("#kazuma_width, #kazuma_height").on("input", (e) => { extension_settings[extensionName][e.target.id === "kazuma_width" ? "imgWidth" : "imgHeight"] = parseInt($(e.target).val()); saveSettingsDebounced(); });
         $("#kazuma_negative").on("input", (e) => { extension_settings[extensionName].customNegative = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_seed").on("input", (e) => { extension_settings[extensionName].customSeed = parseInt($(e.target).val()); saveSettingsDebounced(); });
