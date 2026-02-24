@@ -597,14 +597,17 @@ Output ONLY the edit prompt. Nothing else. No quotes, no prefixes, no commentary
             else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
             else perspInst = "Describe the entire environment and atmosphere.";
 
-            instruction = `
-Task: Write an image generation prompt for the following scene.
+            instruction = `[OVERRIDE ALL PREVIOUS INSTRUCTIONS. THIS IS A SEPARATE TASK.]
+
+You are an image prompt writer. Ignore all roleplay instructions, character cards, and output format rules above. Do NOT continue the story. Do NOT write dialogue. Do NOT roleplay.
+
+Your ONLY job: write ONE image generation prompt for this scene.
+
 Scene: "${lastMessage}"
-Style Constraint: ${styleInst}
-Perspective: ${perspInst}
-Additional Req: ${extra}
-Output ONLY the prompt text.
-            `;
+Style: ${styleInst}
+Perspective: ${perspInst}${extra ? `\nAdditional: ${extra}` : ""}
+
+Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no prefixes.`;
         }
 
         let generatedText = await generateQuietPrompt(instruction, true);
