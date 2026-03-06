@@ -98,6 +98,7 @@ const defaultSettings = {
     connectionProfile: "",
     savedWorkflowStates: {},
     tagAutocomplete: true,
+    promptModel: "",
     editMode: false,
     selectedImage: null,
     selectedImageBase64: null,
@@ -437,6 +438,7 @@ async function loadSettings() {
     $("#kazuma_compress").prop("checked", extension_settings[extensionName].compressImages);
 	
 	$("#kazuma_profile_strategy").val(extension_settings[extensionName].profileStrategy || "current");
+    $("#kazuma_prompt_model").val(extension_settings[extensionName].promptModel || "");
     toggleProfileVisibility();
 
     updateSliderInput('kazuma_steps', 'kazuma_steps_val', extension_settings[extensionName].steps);
@@ -462,6 +464,7 @@ async function loadSettings() {
     populateResolutions();
     populateProfiles();
     populateWorkflows();
+    populatePromptModels(true);
     await fetchComfyLists();
 }
 
@@ -477,6 +480,85 @@ function toggleProfileVisibility() {
     } else {
         $("#kazuma_profile").hide();
     }
+}
+
+// Model select element IDs mapped by API + subtype (mirrors SillyTavern's getModelOptions)
+const MODEL_SELECT_MAP = [
+    { id: 'model_openai_select', api: 'openai', type: 'openai' },
+    { id: 'model_claude_select', api: 'openai', type: 'claude' },
+    { id: 'model_openrouter_select', api: 'openai', type: 'openrouter' },
+    { id: 'model_ai21_select', api: 'openai', type: 'ai21' },
+    { id: 'model_google_select', api: 'openai', type: 'makersuite' },
+    { id: 'model_vertexai_select', api: 'openai', type: 'vertexai' },
+    { id: 'model_mistralai_select', api: 'openai', type: 'mistralai' },
+    { id: 'custom_model_id', api: 'openai', type: 'custom' },
+    { id: 'model_cohere_select', api: 'openai', type: 'cohere' },
+    { id: 'model_perplexity_select', api: 'openai', type: 'perplexity' },
+    { id: 'model_groq_select', api: 'openai', type: 'groq' },
+    { id: 'model_chutes_select', api: 'openai', type: 'chutes' },
+    { id: 'model_siliconflow_select', api: 'openai', type: 'siliconflow' },
+    { id: 'model_electronhub_select', api: 'openai', type: 'electronhub' },
+    { id: 'model_nanogpt_select', api: 'openai', type: 'nanogpt' },
+    { id: 'openrouter_model', api: 'textgenerationwebui', type: 'openrouter' },
+    { id: 'model_togetherai_select', api: 'textgenerationwebui', type: 'togetherai' },
+    { id: 'model_infermaticai_select', api: 'textgenerationwebui', type: 'infermaticai' },
+    { id: 'model_dreamgen_select', api: 'textgenerationwebui', type: 'dreamgen' },
+    { id: 'mancer_model', api: 'textgenerationwebui', type: 'mancer' },
+    { id: 'vllm_model', api: 'textgenerationwebui', type: 'vllm' },
+    { id: 'aphrodite_model', api: 'textgenerationwebui', type: 'aphrodite' },
+    { id: 'ollama_model', api: 'textgenerationwebui', type: 'ollama' },
+    { id: 'tabby_model', api: 'textgenerationwebui', type: 'tabby' },
+    { id: 'llamacpp_model', api: 'textgenerationwebui', type: 'llamacpp' },
+    { id: 'featherless_model', api: 'textgenerationwebui', type: 'featherless' },
+    { id: 'generic_model_textgenerationwebui', api: 'textgenerationwebui', type: 'generic' },
+    { id: 'custom_model_textgenerationwebui', api: 'textgenerationwebui', type: 'ooba' },
+];
+
+function getActiveModelControl() {
+    const ctx = getContext();
+    const api = ctx.mainApi;
+    let subType = null;
+    if (api === 'openai') {
+        subType = ctx.chatCompletionSettings?.chat_completion_source;
+    } else if (api === 'textgenerationwebui') {
+        subType = ctx.textCompletionSettings?.type;
+    }
+    if (!subType) return null;
+
+    const entry = MODEL_SELECT_MAP.find(m => m.api === api && m.type === subType);
+    if (!entry) return null;
+
+    const el = document.getElementById(entry.id);
+    if (el instanceof HTMLSelectElement || el instanceof HTMLInputElement) return el;
+    return null;
+}
+
+function populatePromptModels(silent = false) {
+    const control = getActiveModelControl();
+    const $list = $("#kazuma_prompt_model_list");
+    $list.empty();
+    if (!control) {
+        if (!silent) toastr.warning("Could not detect model selector for the current API.");
+        return;
+    }
+
+    let options = [];
+    if (control instanceof HTMLSelectElement) {
+        options = Array.from(control.options).filter(o => o.value).map(o => ({ value: o.value, text: o.text }));
+    } else if (control instanceof HTMLInputElement && control.list) {
+        options = Array.from(control.list.options).filter(o => o.value).map(o => ({ value: o.value, text: o.value }));
+    }
+    if (control.value && !options.find(o => o.value === control.value)) {
+        options.unshift({ value: control.value, text: control.value });
+    }
+
+    const seen = new Set();
+    for (const opt of options) {
+        if (seen.has(opt.value)) continue;
+        seen.add(opt.value);
+        $list.append(`<option value="${opt.value}">${opt.text !== opt.value ? opt.text : ''}</option>`);
+    }
+    if (!silent) toastr.success(`Loaded ${seen.size} models from current API.`);
 }
 
 function updateGenerateButtonText(isEditMode) {
@@ -904,7 +986,31 @@ Perspective: ${perspInst}${extra ? `\nAdditional: ${extra}` : ""}
 Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no prefixes.`;
         }
 
-        let generatedText = await generateQuietPrompt(instruction, true);
+        // Model override: temporarily swap the active model if promptModel is set
+        const overrideModel = extension_settings[extensionName].promptModel || "";
+        const modelControl = overrideModel ? getActiveModelControl() : null;
+        let originalModel = null;
+        if (modelControl && overrideModel) {
+            originalModel = modelControl.value;
+            if (originalModel !== overrideModel) {
+                modelControl.value = overrideModel;
+                $(modelControl).trigger('change');
+                await new Promise(r => setTimeout(r, 300));
+            } else {
+                originalModel = null; // no swap needed
+            }
+        }
+
+        let generatedText;
+        try {
+            generatedText = await generateQuietPrompt(instruction, true);
+        } finally {
+            // Always restore model, even if generation fails
+            if (originalModel !== null && modelControl) {
+                modelControl.value = originalModel;
+                $(modelControl).trigger('change');
+            }
+        }
 
         if (didSwitch) {
             targetDropdown.val(originalProfile).trigger("change");
@@ -1325,6 +1431,8 @@ jQuery(async () => {
         $("#kazuma_prompt_style").on("change", (e) => { extension_settings[extensionName].promptStyle = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_prompt_persp").on("change", (e) => { extension_settings[extensionName].promptPerspective = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_prompt_extra").on("input", (e) => { extension_settings[extensionName].promptExtra = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_prompt_model").on("input", (e) => { extension_settings[extensionName].promptModel = $(e.target).val().trim(); saveSettingsDebounced(); });
+        $("#kazuma_prompt_model_refresh").on("click", () => populatePromptModels());
         $("#kazuma_profile_strategy").on("change", (e) => {
             extension_settings[extensionName].profileStrategy = $(e.target).val();
             toggleProfileVisibility();
