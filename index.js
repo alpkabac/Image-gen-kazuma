@@ -97,11 +97,304 @@ const defaultSettings = {
     promptExtra: "",              
     connectionProfile: "",
     savedWorkflowStates: {},
+    tagAutocomplete: true,
     editMode: false,
     selectedImage: null,
     selectedImageBase64: null,
     editWorkflowName: ""
 };
+
+/* --- TAG AUTOCOMPLETE SYSTEM --- */
+// Optimized for 190K+ tags:
+// - Sorted array + binary search for O(log n) prefix lookups
+// - Separate alias index (flat sorted array) for alias prefix matching
+// - Compact storage: parallel arrays instead of objects
+// - Substring scan only as fallback with early exit
+let tagLoaded = false;
+let tagDataLoading = false;
+// Parallel arrays for compact storage (less GC pressure than 190K objects)
+let tagNames = null;      // string[] - sorted alphabetically
+let tagCats = null;       // Uint8Array
+let tagCounts = null;     // Uint32Array
+let tagSortedIdx = null;  // original indices sorted alphabetically (for binary search)
+// Alias index: sorted array of { alias, idx } for binary search
+let aliasIndex = null;
+
+async function loadTagData() {
+    if (tagLoaded || tagDataLoading) return;
+    tagDataLoading = true;
+    try {
+        const res = await fetch(`${extensionFolderPath}/tags.csv`);
+        if (!res.ok) throw new Error("tags.csv not found");
+        const text = await res.text();
+        const lines = text.split('\n');
+
+        // First pass: count valid lines
+        let count = 0;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].length > 0 && lines[i][0] !== '\r') count++;
+        }
+
+        // Allocate typed arrays
+        const names = new Array(count);
+        const cats = new Uint8Array(count);
+        const counts = new Uint32Array(count);
+        const aliasEntries = [];
+        let idx = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line || line === '\r') continue;
+            const c1 = line.indexOf(',');
+            const c2 = line.indexOf(',', c1 + 1);
+            const c3 = line.indexOf(',', c2 + 1);
+            
+            const tag = line.substring(0, c1);
+            names[idx] = tag;
+            cats[idx] = parseInt(line.substring(c1 + 1, c2)) || 0;
+            counts[idx] = parseInt(line.substring(c2 + 1, c3 > -1 ? c3 : line.length)) || 0;
+
+            // Parse aliases
+            if (c3 > -1) {
+                let aStr = line.substring(c3 + 1).trim();
+                if (aStr.charCodeAt(0) === 34) aStr = aStr.slice(1, -1); // strip quotes
+                if (aStr) {
+                    let start = 0;
+                    for (let j = 0; j <= aStr.length; j++) {
+                        if (j === aStr.length || aStr[j] === ',') {
+                            const a = aStr.substring(start, j).trim();
+                            if (a && a[0] !== '/') aliasEntries.push({ a, idx });
+                            start = j + 1;
+                        }
+                    }
+                }
+            }
+            idx++;
+        }
+
+        // Build sorted index for binary search on tag names
+        const sortedIdx = new Array(idx);
+        for (let i = 0; i < idx; i++) sortedIdx[i] = i;
+        sortedIdx.sort((a, b) => names[a] < names[b] ? -1 : names[a] > names[b] ? 1 : 0);
+
+        // Sort alias entries for binary search
+        aliasEntries.sort((a, b) => a.a < b.a ? -1 : a.a > b.a ? 1 : 0);
+
+        tagNames = names;
+        tagCats = cats;
+        tagCounts = counts;
+        tagSortedIdx = sortedIdx;
+        aliasIndex = aliasEntries;
+        tagLoaded = true;
+        console.log(`[${extensionName}] Loaded ${idx} tags, ${aliasEntries.length} aliases (indexed)`);
+    } catch (e) {
+        console.warn(`[${extensionName}] Failed to load tags:`, e);
+        tagLoaded = true;
+        tagNames = [];
+    }
+    tagDataLoading = false;
+}
+
+// Binary search: find first index where sorted value >= prefix
+function lowerBound(sortedArr, prefix, accessor) {
+    let lo = 0, hi = sortedArr.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        const val = accessor ? accessor(sortedArr[mid]) : sortedArr[mid];
+        if (val < prefix) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+function formatTag(raw) {
+    return raw.replace(/_/g, ' ');
+}
+
+function formatTagForComfy(raw) {
+    return raw.replace(/_/g, ' ').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+function searchTags(query, limit = 15) {
+    if (!tagNames || tagNames.length === 0 || !query) return [];
+    const q = query.toLowerCase().replace(/ /g, '_');
+    
+    // Collect unique matching indices with their best match type (prefix > alias > substring)
+    const seen = new Set();
+    const prefixHits = [];   // highest priority
+    const aliasHits = [];    // medium priority
+    const substringHits = []; // lowest priority
+
+    // 1. Binary search prefix on sorted tag names: O(log n + k)
+    const startIdx = lowerBound(tagSortedIdx, q, (i) => tagNames[i]);
+    for (let i = startIdx; i < tagSortedIdx.length; i++) {
+        const ti = tagSortedIdx[i];
+        if (!tagNames[ti].startsWith(q)) break; // Past prefix range
+        seen.add(ti);
+        prefixHits.push(ti);
+        if (prefixHits.length >= limit * 2) break;
+    }
+
+    // 2. Binary search prefix on alias index: O(log m + k)
+    if (prefixHits.length < limit) {
+        const aStart = lowerBound(aliasIndex, q, (e) => e.a);
+        for (let i = aStart; i < aliasIndex.length; i++) {
+            if (!aliasIndex[i].a.startsWith(q)) break;
+            const ti = aliasIndex[i].idx;
+            if (!seen.has(ti)) {
+                seen.add(ti);
+                aliasHits.push(ti);
+                if (prefixHits.length + aliasHits.length >= limit * 2) break;
+            }
+        }
+    }
+
+    // 3. Substring fallback only if we still need more results (linear but rare)
+    if (prefixHits.length + aliasHits.length < limit && q.length >= 3) {
+        for (let i = 0; i < tagNames.length && substringHits.length < limit; i++) {
+            if (!seen.has(i) && tagNames[i].includes(q)) {
+                seen.add(i);
+                substringHits.push(i);
+            }
+        }
+    }
+
+    // Merge: prefix first, then alias, then substring - each sorted by count
+    const sortByCount = (a, b) => tagCounts[b] - tagCounts[a];
+    prefixHits.sort(sortByCount);
+    aliasHits.sort(sortByCount);
+    substringHits.sort(sortByCount);
+
+    const merged = [];
+    for (const arr of [prefixHits, aliasHits, substringHits]) {
+        for (let i = 0; i < arr.length && merged.length < limit; i++) {
+            merged.push(arr[i]);
+        }
+    }
+
+    // Convert to result objects
+    return merged.map(i => ({ tag: tagNames[i], cat: tagCats[i], count: tagCounts[i] }));
+}
+
+// Category colors for danbooru tags
+const TAG_CAT_COLORS = {
+    0: '#6cbded', // general (blue)
+    1: '#e87a90', // artist (red)
+    3: '#c797ff', // copyright/series (purple)
+    4: '#35c64a', // character (green)
+    5: '#f5ab3d', // meta (orange)
+};
+
+function attachAutocomplete($textarea) {
+    let $dropdown = null;
+    let selectedIdx = -1;
+    let currentResults = [];
+
+    function getCaretWord() {
+        const val = $textarea.val();
+        const pos = $textarea[0].selectionStart;
+        // Find the start of current tag (after last comma or start)
+        let start = val.lastIndexOf(',', pos - 1) + 1;
+        // Skip leading space after comma
+        while (start < pos && val[start] === ' ') start++;
+        const word = val.substring(start, pos);
+        return { word, start, end: pos };
+    }
+
+    function showDropdown(results, caretInfo) {
+        currentResults = results;
+        selectedIdx = -1;
+        if (!$dropdown) {
+            $dropdown = $('<div class="kazuma-tag-dropdown"></div>').css({
+                position: 'absolute', zIndex: 99999, maxHeight: '200px', overflowY: 'auto',
+                background: 'var(--smart-theme-bg-color, #1a1a2e)', border: '1px solid var(--smart-border-color, #444)',
+                borderRadius: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)', width: '100%', left: 0
+            });
+            $textarea.parent().css('position', 'relative').append($dropdown);
+        }
+        $dropdown.empty().show();
+        results.forEach((t, i) => {
+            const color = TAG_CAT_COLORS[t.cat] || TAG_CAT_COLORS[0];
+            const display = formatTag(t.tag);
+            const countStr = t.count >= 1000000 ? (t.count / 1000000).toFixed(1) + 'M' : t.count >= 1000 ? (t.count / 1000).toFixed(0) + 'K' : t.count;
+            const $item = $(`<div style="padding:4px 8px; cursor:pointer; font-size:12px; display:flex; justify-content:space-between; align-items:center;"></div>`);
+            $item.append(`<span style="color:${color}; font-weight:500;">${display}</span>`);
+            $item.append(`<span style="opacity:0.4; font-size:10px; margin-left:8px;">${countStr}</span>`);
+            $item.on('mousedown', (e) => { e.preventDefault(); insertTag(i, caretInfo); });
+            $item.on('mouseenter', () => { selectedIdx = i; highlightItem(); });
+            $dropdown.append($item);
+        });
+    }
+
+    function highlightItem() {
+        if (!$dropdown) return;
+        $dropdown.children().css('background', '');
+        if (selectedIdx >= 0 && selectedIdx < currentResults.length) {
+            $dropdown.children().eq(selectedIdx).css('background', 'rgba(255,255,255,0.1)');
+        }
+    }
+
+    function insertTag(idx, caretInfo) {
+        const tag = currentResults[idx];
+        if (!tag) return;
+        const formatted = formatTagForComfy(tag.tag);
+        const val = $textarea.val();
+        const before = val.substring(0, caretInfo.start);
+        const after = val.substring(caretInfo.end);
+        const newVal = before + formatted + ', ' + after;
+        $textarea.val(newVal);
+        // Set cursor after inserted tag + ", "
+        const newPos = caretInfo.start + formatted.length + 2;
+        $textarea[0].setSelectionRange(newPos, newPos);
+        $textarea.trigger('input');
+        hideDropdown();
+    }
+
+    function hideDropdown() {
+        if ($dropdown) $dropdown.hide();
+        selectedIdx = -1;
+        currentResults = [];
+    }
+
+    let debounceTimer = null;
+    $textarea.on('input', function() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            const { word } = getCaretWord();
+            if (word.length < 2) { hideDropdown(); return; }
+            const results = searchTags(word);
+            if (results.length === 0) { hideDropdown(); return; }
+            showDropdown(results, getCaretWord());
+        }, 120);
+    });
+
+    $textarea.on('keydown', function(e) {
+        if (!$dropdown || !$dropdown.is(':visible') || currentResults.length === 0) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedIdx = Math.min(selectedIdx + 1, currentResults.length - 1);
+            highlightItem();
+            // Scroll into view
+            const $items = $dropdown.children();
+            if ($items.eq(selectedIdx).length) $items.eq(selectedIdx)[0].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedIdx = Math.max(selectedIdx - 1, 0);
+            highlightItem();
+            const $items = $dropdown.children();
+            if ($items.eq(selectedIdx).length) $items.eq(selectedIdx)[0].scrollIntoView({ block: 'nearest' });
+        } else if ((e.key === 'Enter' || e.key === 'Tab') && selectedIdx >= 0) {
+            e.preventDefault();
+            insertTag(selectedIdx, getCaretWord());
+        } else if (e.key === 'Escape') {
+            hideDropdown();
+        }
+    });
+
+    $textarea.on('blur', function() { setTimeout(hideDropdown, 150); });
+
+    return { destroy: () => { hideDropdown(); if ($dropdown) $dropdown.remove(); $dropdown = null; } };
+}
 
 async function loadSettings() {
     if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
@@ -113,6 +406,7 @@ async function loadSettings() {
 
     $("#kazuma_enable").prop("checked", extension_settings[extensionName].enabled);
     $("#kazuma_debug").prop("checked", extension_settings[extensionName].debugPrompt);
+    $("#kazuma_tag_autocomplete").prop("checked", extension_settings[extensionName].tagAutocomplete !== false);
     $("#kazuma_url").val(extension_settings[extensionName].comfyUrl);
     $("#kazuma_width").val(extension_settings[extensionName].imgWidth);
     $("#kazuma_height").val(extension_settings[extensionName].imgHeight);
@@ -628,9 +922,18 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
                 </div>
             `);
             let currentText = generatedText;
-            $content.find("textarea").on("input", function() { currentText = $(this).val(); });
+            const $diagTextarea = $content.find("textarea");
+            $diagTextarea.on("input", function() { currentText = $(this).val(); });
+
+            // Attach autocomplete to diagnostic mode textarea
+            let diagAc = null;
+            if (s.tagAutocomplete !== false && tagLoaded && tagNames && tagNames.length > 0) {
+                setTimeout(() => { diagAc = attachAutocomplete($diagTextarea); }, 100);
+            }
+
             const popup = new Popup($content, POPUP_TYPE.CONFIRM, "Diagnostic Mode", { okButton: "Send", cancelButton: "Stop" });
             const confirmed = await popup.show();
+            if (diagAc) diagAc.destroy();
 
             if (!confirmed) {
                 toastr.info("Generation stopped by user.");
@@ -663,16 +966,32 @@ async function onManualPrompt() {
         return toastr.warning("Edit mode requires an image. Please upload or select one.");
     }
 
+    // Preload tag data if autocomplete is enabled
+    const useAutocomplete = extension_settings[extensionName].tagAutocomplete !== false;
+    if (useAutocomplete) await loadTagData();
+
     const $content = $(`
         <div style="display: flex; flex-direction: column; gap: 10px;">
             <p><b>Enter your ${isEditMode ? 'edit instruction' : 'image prompt'} manually:</b></p>
-            <textarea class="text_pole" rows="6" style="width:100%; resize:vertical; font-family:monospace;" placeholder="${isEditMode ? 'e.g. Change her hair color to bright blue' : 'e.g. a woman standing in a field at sunset'}"></textarea>
+            <textarea class="text_pole kazuma-manual-textarea" rows="6" style="width:100%; resize:vertical; font-family:monospace;" placeholder="${isEditMode ? 'e.g. Change her hair color to bright blue' : 'e.g. 1girl, solo, blue hair, standing'}"></textarea>
         </div>
     `);
     let currentText = "";
-    $content.find("textarea").on("input", function() { currentText = $(this).val(); });
+    const $textarea = $content.find("textarea");
+    $textarea.on("input", function() { currentText = $(this).val(); });
+
+    // Attach autocomplete if enabled and tags loaded
+    let ac = null;
+    if (useAutocomplete && tagLoaded && tagNames && tagNames.length > 0) {
+        // Defer until popup is visible so parent positioning works
+        setTimeout(() => { ac = attachAutocomplete($textarea); }, 100);
+    }
+
     const popup = new Popup($content, POPUP_TYPE.CONFIRM, "Manual Prompt", { okButton: "Send", cancelButton: "Cancel" });
     const confirmed = await popup.show();
+
+    // Cleanup autocomplete
+    if (ac) ac.destroy();
 
     if (!confirmed || !currentText.trim()) {
         if (confirmed && !currentText.trim()) toastr.warning("Prompt is empty.");
@@ -969,6 +1288,7 @@ jQuery(async () => {
 
         $("#kazuma_enable").on("change", (e) => { extension_settings[extensionName].enabled = $(e.target).prop("checked"); saveSettingsDebounced(); });
         $("#kazuma_debug").on("change", (e) => { extension_settings[extensionName].debugPrompt = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_tag_autocomplete").on("change", (e) => { extension_settings[extensionName].tagAutocomplete = $(e.target).prop("checked"); saveSettingsDebounced(); });
         $("#kazuma_url").on("input", (e) => { extension_settings[extensionName].comfyUrl = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_profile").on("change", (e) => { extension_settings[extensionName].connectionProfile = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_auto_enable").on("change", (e) => { extension_settings[extensionName].autoGenEnabled = $(e.target).prop("checked"); saveSettingsDebounced(); });
