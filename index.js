@@ -900,8 +900,12 @@ async function onGeneratePrompt() {
 
     if (strategy === "specific" && requestProfile && requestProfile !== originalProfile && requestProfile !== "") {
         toastr.info(`Switching presets...`);
+        const presetReady = new Promise(resolve => {
+            eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, resolve);
+        });
+        const presetTimeout = new Promise(resolve => setTimeout(resolve, 10000));
         targetDropdown.val(requestProfile).trigger("change");
-        await new Promise(r => setTimeout(r, 1000));
+        await Promise.race([presetReady, presetTimeout]);
         didSwitch = true;
     }
 
@@ -1013,8 +1017,12 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
         }
 
         if (didSwitch) {
+            const restoreReady = new Promise(resolve => {
+                eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, resolve);
+            });
+            const restoreTimeout = new Promise(resolve => setTimeout(resolve, 10000));
             targetDropdown.val(originalProfile).trigger("change");
-            await new Promise(r => setTimeout(r, 500));
+            await Promise.race([restoreReady, restoreTimeout]);
         }
 
         if (s.debugPrompt) {
