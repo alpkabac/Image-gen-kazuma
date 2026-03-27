@@ -906,7 +906,6 @@ async function onGeneratePrompt() {
         const presetTimeout = new Promise(resolve => setTimeout(resolve, 10000));
         targetDropdown.val(requestProfile).trigger("change");
         await Promise.race([presetReady, presetTimeout]);
-        await reloadCurrentChat();
         didSwitch = true;
     }
 
@@ -1024,7 +1023,6 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
             const restoreTimeout = new Promise(resolve => setTimeout(resolve, 10000));
             targetDropdown.val(originalProfile).trigger("change");
             await Promise.race([restoreReady, restoreTimeout]);
-            await reloadCurrentChat();
         }
 
         if (s.debugPrompt) {
