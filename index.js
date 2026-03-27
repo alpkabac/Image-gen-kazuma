@@ -4,7 +4,6 @@ import { saveSettingsDebounced, generateQuietPrompt, saveChat, reloadCurrentChat
 import { saveBase64AsFile, getBase64Async } from "../../../utils.js";
 import { humanizedDateTime } from "../../../RossAscends-mods.js";
 import { Popup, POPUP_TYPE } from "../../../popup.js";
-import { ChatCompletionService } from "../../../custom-request.js";
 
 const extensionName = "Image-gen-kazuma";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -895,6 +894,20 @@ async function onGeneratePrompt() {
 
     const strategy = extension_settings[extensionName].profileStrategy || "current";
     const requestProfile = extension_settings[extensionName].connectionProfile;
+    const targetDropdown = $("#settings_preset_openai");
+    const originalProfile = targetDropdown.val();
+    let didSwitch = false;
+
+    if (strategy === "specific" && requestProfile && requestProfile !== originalProfile && requestProfile !== "") {
+        toastr.info(`Switching presets...`);
+        const presetReady = new Promise(resolve => {
+            eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, resolve);
+        });
+        const presetTimeout = new Promise(resolve => setTimeout(resolve, 10000));
+        targetDropdown.val(requestProfile).trigger("change");
+        await Promise.race([presetReady, presetTimeout]);
+        didSwitch = true;
+    }
 
     // [START PROGRESS]
     showKazumaProgress(isEditMode ? "Converting to edit instruction..." : "Generating Prompt...");
@@ -978,40 +991,36 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
         }
 
         const overrideModel = extension_settings[extensionName].promptModel || "";
-        let generatedText;
+        const modelControl = overrideModel ? getActiveModelControl() : null;
+        let originalModel = null;
+        if (modelControl && overrideModel) {
+            originalModel = modelControl.value;
+            if (originalModel !== overrideModel) {
+                modelControl.value = overrideModel;
+                $(modelControl).trigger('change');
+                await new Promise(r => setTimeout(r, 300));
+            } else {
+                originalModel = null;
+            }
+        }
 
-        const useDirectRequest = strategy === "specific" && requestProfile && requestProfile !== "";
-        if (useDirectRequest) {
-            const presetName = $(`#settings_preset_openai option[value="${requestProfile}"]`).text();
-            const result = await ChatCompletionService.processRequest(
-                {
-                    messages: [{ role: "user", content: instruction }],
-                    ...(overrideModel && { model: overrideModel }),
-                },
-                { presetName },
-            );
-            generatedText = result.content;
-        } else {
-            const modelControl = overrideModel ? getActiveModelControl() : null;
-            let originalModel = null;
-            if (modelControl && overrideModel) {
-                originalModel = modelControl.value;
-                if (originalModel !== overrideModel) {
-                    modelControl.value = overrideModel;
-                    $(modelControl).trigger('change');
-                    await new Promise(r => setTimeout(r, 300));
-                } else {
-                    originalModel = null;
-                }
+        let generatedText;
+        try {
+            generatedText = await generateQuietPrompt(instruction, true);
+        } finally {
+            if (originalModel !== null && modelControl) {
+                modelControl.value = originalModel;
+                $(modelControl).trigger('change');
             }
-            try {
-                generatedText = await generateQuietPrompt(instruction, true);
-            } finally {
-                if (originalModel !== null && modelControl) {
-                    modelControl.value = originalModel;
-                    $(modelControl).trigger('change');
-                }
-            }
+        }
+
+        if (didSwitch) {
+            const restoreReady = new Promise(resolve => {
+                eventSource.once(event_types.OAI_PRESET_CHANGED_AFTER, resolve);
+            });
+            const restoreTimeout = new Promise(resolve => setTimeout(resolve, 10000));
+            targetDropdown.val(originalProfile).trigger("change");
+            await Promise.race([restoreReady, restoreTimeout]);
         }
 
         if (s.debugPrompt) {
