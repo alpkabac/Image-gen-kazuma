@@ -907,7 +907,6 @@ async function onGeneratePrompt() {
         targetDropdown.val(requestProfile).trigger("change");
         await Promise.race([presetReady, presetTimeout]);
         await reloadCurrentChat();
-        toastr.clear();
         didSwitch = true;
     }
 
@@ -1026,7 +1025,6 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
             targetDropdown.val(originalProfile).trigger("change");
             await Promise.race([restoreReady, restoreTimeout]);
             await reloadCurrentChat();
-            toastr.clear();
         }
 
         if (s.debugPrompt) {
