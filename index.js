@@ -906,6 +906,7 @@ async function onGeneratePrompt() {
         const presetTimeout = new Promise(resolve => setTimeout(resolve, 10000));
         targetDropdown.val(requestProfile).trigger("change");
         await Promise.race([presetReady, presetTimeout]);
+        await reloadCurrentChat();
         didSwitch = true;
     }
 
@@ -990,6 +991,7 @@ Perspective: ${perspInst}${extra ? `\nAdditional: ${extra}` : ""}
 Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no prefixes.`;
         }
 
+        // Model override: temporarily swap the active model if promptModel is set
         const overrideModel = extension_settings[extensionName].promptModel || "";
         const modelControl = overrideModel ? getActiveModelControl() : null;
         let originalModel = null;
@@ -1000,7 +1002,7 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
                 $(modelControl).trigger('change');
                 await new Promise(r => setTimeout(r, 300));
             } else {
-                originalModel = null;
+                originalModel = null; // no swap needed
             }
         }
 
@@ -1008,6 +1010,7 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
         try {
             generatedText = await generateQuietPrompt(instruction, true);
         } finally {
+            // Always restore model, even if generation fails
             if (originalModel !== null && modelControl) {
                 modelControl.value = originalModel;
                 $(modelControl).trigger('change');
@@ -1021,6 +1024,7 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
             const restoreTimeout = new Promise(resolve => setTimeout(resolve, 10000));
             targetDropdown.val(originalProfile).trigger("change");
             await Promise.race([restoreReady, restoreTimeout]);
+            await reloadCurrentChat();
         }
 
         if (s.debugPrompt) {
