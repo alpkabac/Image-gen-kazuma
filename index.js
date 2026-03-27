@@ -878,6 +878,63 @@ async function onTestConnection() {
     } catch (error) { toastr.error(`Connection failed: ${error.message}`, "Image Gen Kazuma"); }
 }
 
+/* --- PRESET SWITCH HELPERS --- */
+async function waitForPresetSwitch(targetDropdown, presetValue) {
+    const eventName = event_types.OAI_PRESET_CHANGED_AFTER;
+
+    if (eventName) {
+        const presetLoaded = new Promise(resolve => {
+            let resolved = false;
+            const done = () => { if (!resolved) { resolved = true; resolve(); } };
+
+            const handler = () => {
+                eventSource.removeListener(eventName, handler);
+                setTimeout(done, 300);
+            };
+            eventSource.on(eventName, handler);
+
+            setTimeout(() => {
+                eventSource.removeListener(eventName, handler);
+                done();
+            }, 5000);
+        });
+
+        targetDropdown.val(presetValue).trigger("change");
+        await presetLoaded;
+    } else {
+        targetDropdown.val(presetValue).trigger("change");
+        await new Promise(r => setTimeout(r, 3000));
+    }
+
+    await tryAutoReloadRegex();
+}
+
+async function tryAutoReloadRegex() {
+    await new Promise(r => setTimeout(r, 600));
+
+    let reloadTriggered = false;
+
+    $('#toast-container .toast').each(function () {
+        const $toast = $(this);
+        const msgText = $toast.text().toLowerCase();
+        if (msgText.includes('regex') && (msgText.includes('reload') || msgText.includes('click'))) {
+            const $clickable = $toast.find('a, [onclick], button, .clickable');
+            if ($clickable.length) {
+                $clickable.first()[0].click();
+            } else {
+                $toast[0].click();
+            }
+            reloadTriggered = true;
+            return false;
+        }
+    });
+
+    if (reloadTriggered) {
+        await new Promise(r => setTimeout(r, 1000));
+        console.log(`[${extensionName}] Auto-reloaded regex scripts after preset switch`);
+    }
+}
+
 /* --- UPDATED GENERATION LOGIC --- */
 async function onGeneratePrompt() {
     if (!extension_settings[extensionName].enabled) return;
@@ -900,8 +957,7 @@ async function onGeneratePrompt() {
 
     if (strategy === "specific" && requestProfile && requestProfile !== originalProfile && requestProfile !== "") {
         toastr.info(`Switching presets...`);
-        targetDropdown.val(requestProfile).trigger("change");
-        await new Promise(r => setTimeout(r, 1000));
+        await waitForPresetSwitch(targetDropdown, requestProfile);
         didSwitch = true;
     }
 
@@ -1013,8 +1069,7 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
         }
 
         if (didSwitch) {
-            targetDropdown.val(originalProfile).trigger("change");
-            await new Promise(r => setTimeout(r, 500));
+            await waitForPresetSwitch(targetDropdown, originalProfile);
         }
 
         if (s.debugPrompt) {
@@ -1057,7 +1112,7 @@ Output ONLY the image prompt. No narration, no story, no dialogue, no quotes, no
     } catch (err) {
         // [HIDE PROGRESS ON ERROR]
         hideKazumaProgress();
-        if (didSwitch) targetDropdown.val(originalProfile).trigger("change");
+        if (didSwitch) await waitForPresetSwitch(targetDropdown, originalProfile);
         console.error(err);
         toastr.error("Generation failed. Check console.");
     }
