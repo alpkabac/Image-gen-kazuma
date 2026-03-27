@@ -56,6 +56,16 @@
                 <!-- 1. Specific Profile List (Shown ONLY if 'specific') -->
                 <select id="kazuma_profile" class="text_pole" style="width:100%; display:none;"></select>
 
+                <!-- Model Override for Prompt Generation -->
+                <div class="kazuma-sub-label" style="margin-top:8px;">Override Model (for prompt gen)</div>
+                <div style="display:flex; gap:4px; align-items:center; margin-bottom:5px;">
+                    <input type="text" id="kazuma_prompt_model" class="text_pole" list="kazuma_prompt_model_list" style="flex:1;" placeholder="Leave empty to use current model">
+                    <datalist id="kazuma_prompt_model_list"></datalist>
+                    <div id="kazuma_prompt_model_refresh" class="menu_button menu_button_icon" title="Refresh model list" style="flex-shrink:0; padding:5px 8px;">
+                        <i class="fa-solid fa-rotate"></i>
+                    </div>
+                </div>
+
                 <!-- 2. NEW: Prompt Builder (Shown ONLY if 'current') -->
                 <div id="kazuma_prompt_builder" style="display:none; background:rgba(0,0,0,0.2); padding:10px; border-radius:5px; margin-top:5px; border-left: 2px solid var(--smart-text-color);">
                     <div class="kazuma-sub-label" style="margin-top:0;">Model Style (Format)</div>
