@@ -999,14 +999,26 @@ Convert this scene into a Flux Klein 9B image editing prompt. The input image is
 
 Scene: "${lastMessage}"
 
-Write a single paragraph describing what the woman is doing in the scene. Use natural language sentences. Be specific about: body position, camera angle, expressions, clothing state, and what is visible in frame. For NSFW scenes, use direct anatomical terms. For SFW scenes, describe the activity, setting, and mood.
+Write a single paragraph describing what the woman is doing in the scene. Use FULL NATURAL LANGUAGE SENTENCES, never tags. Be specific about: body position, camera angle, expressions, clothing state, and what is visible in frame.
+
+IMPORTANT - Explicit/NSFW content rules (SNOFS LoRA style):
+If the scene contains sexual or explicit content, you MUST use direct, descriptive natural language. Describe actions and anatomy in full sentences, not shorthand or tags.
+Use these terms naturally in sentences when relevant: blowjob, deepthroat, cowgirl position, doggystyle position, missionary position, reverse cowgirl position, prone position, spooning position, sex, cum, cunnilingus, fingering, handjob, masturbating, oral sex, nude, naked, vagina, penis, anus.
+Describe clothing states as full phrases like "her panties are pulled down to her thighs" or "her shirt is unbuttoned and open" rather than shorthand like "panty pull" or "open shirt."
+For blowjob scenes, be explicit: describe what her lips are doing, eye contact, the position of the penis.
+For sex position scenes, name the position AND describe the body arrangement in detail.
+Always specify what is visible in frame and from what camera angle.
+
+For SFW scenes, describe the activity, setting, mood, lighting, and expression in natural sentences.
 
 Examples:
-- "The woman is on her knees performing oral sex on a standing man. Only the man's lower body is visible in frame. Her lips are wrapped around his erect penis and she is making eye contact with the camera."
-- "A high-angle POV looking down at the woman lying on her back on a bed, nude, with her legs spread. Soft warm bedroom lighting from the left side."
+- "The woman is on her knees performing a blowjob on a standing man. Only the man's lower body is visible in frame. Her lips are wrapped around his erect penis, deepthroating it, and she is making eye contact with the camera."
+- "A high-angle POV looking down at the woman lying on her back on a bed, completely nude, with her legs spread. Her vagina is visible. Soft warm bedroom lighting from the left side."
 - "The woman is standing at a kitchen counter preparing a meal, wearing a casual white sundress. Her hands are covered in flour and she is smiling warmly. Soft natural light streams through a window to her left."
-- "The woman is bent over a desk in doggystyle position, looking back over her shoulder at the camera with a teasing expression. She is wearing a partially unbuttoned white shirt with no bra."
-- "The woman is giving a blowjob. She makes intense eye contact with the camera. Her lips are fully wrapped around a large penis as she is in the midst of the blowjob."
+- "The woman is bent over a desk in doggystyle position, looking back over her shoulder at the camera with a teasing expression. She is wearing a partially unbuttoned white shirt with no bra. Her panties are pulled down to her thighs."
+- "The woman is riding in cowgirl position, sitting upright on a man lying on a bed. She is completely nude, her hands resting on his chest. Her expression is one of pleasure with her eyes half-closed."
+- "The woman is lying in missionary position on a bed, her legs wrapped around a man above her. She is nude and her back is slightly arched. The camera is from a side angle capturing both figures."
+- "The woman is fingering herself while lying on her back on silk sheets. Her panties are pulled to the side and two fingers are inside her vagina. Her other hand is gripping the sheets."
 
 Output ONLY the edit prompt. Nothing else. No quotes, no prefixes, no commentary.`;
             // Append extra instructions if provided
